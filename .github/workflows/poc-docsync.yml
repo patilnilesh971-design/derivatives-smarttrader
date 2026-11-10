@@ -1,0 +1,54 @@
+name: POC DocSync Comment Trigger
+
+# Replica of deriv-com/derivatives-smarttrader/.github/workflows/DocSyncAI.yml
+# (docsync-comment job) with the same gate, the same head.ref resolution and the
+# same git push. The Claude call is replaced by a deterministic append.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  docsync-comment:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '@docbot')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR and resolve head branch
+        id: verify-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          PR_BRANCH=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/pulls/$PR_NUMBER" --jq .head.ref)
+          echo "resolved PR head branch: $PR_BRANCH"
+          echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR Branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          ref: ${{ steps.verify-pr.outputs.pr_branch }}
+          fetch-depth: 0
+
+      - name: Apply instruction
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -e
+          echo "comment author: $COMMENT_AUTHOR"
+          printf '\nINJECTED_BY_COMMENTER=%s\n' "$COMMENT_AUTHOR" >> POC.md
+          printf 'INSTRUCTION=%s\n' "$COMMENT_BODY" >> POC.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add POC.md
+          git commit -m "DocSync AI: Apply @docbot instruction to README.md"
+          git push origin HEAD
